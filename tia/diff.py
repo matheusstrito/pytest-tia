@@ -1,37 +1,45 @@
-"""Turn a git diff into a set of changed line numbers per file.
+"""Turn a git diff into changed line numbers per file.
 
 We diff against a ref (default HEAD, which includes both staged and
 unstaged work) using ``--unified=0`` so each hunk header pins down the
-exact line range that changed.
+exact line range that changed, and we read the **old side** (``-a,b``)
+so the numbers live in the same coordinate system the impact map was
+recorded in (the map was recorded at that ref).
 
-Crucially we read the **old side** of each hunk (``-a,b``). The impact
-map was recorded at that same ref, so its line numbers live in the old
-coordinate system. Using the new side would misattribute every edit
-that shifts line numbers (insert one line and everything below "moved").
+Per file we separate two kinds of change:
+
+* ``mod`` — existing old lines that were modified or deleted.
+* ``ins`` — anchor lines straddling a pure insertion (no old lines).
+
+They are handled differently downstream: a module-level *modification*
+(e.g. changing a constant) is a real impact, but a module-level
+*insertion* (a brand-new function or test) is not.
 """
 
 import subprocess
 from collections import defaultdict
 
 
-def changed_lines(ref: str = "HEAD", cwd: str = ".") -> dict[str, set[int]]:
+def changed_lines(ref: str = "HEAD", cwd: str = ".") -> dict[str, dict[str, set[int]]]:
     out = subprocess.run(
         ["git", "diff", "--unified=0", "--no-color", "--relative", ref],
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    result: dict[str, set[int]] = defaultdict(set)
+    result: dict[str, dict[str, set[int]]] = defaultdict(
+        lambda: {"mod": set(), "ins": set()}
+    )
     current: str | None = None
     for line in out.stdout.splitlines():
         if line.startswith("+++ "):
             path = line[4:].strip()
-            if path == "/dev/null":
-                current = None
-            else:
-                current = path[2:] if path.startswith("b/") else path
+            current = None if path == "/dev/null" else (
+                path[2:] if path.startswith("b/") else path
+            )
         elif line.startswith("@@") and current:
-            # Format: @@ -a,b +c,d @@   (the "-a,b" is the old side)
             try:
                 minus = line.split(" ")[1].lstrip("-")
             except IndexError:
@@ -42,10 +50,7 @@ def changed_lines(ref: str = "HEAD", cwd: str = ".") -> dict[str, set[int]]:
             else:
                 start, count = int(minus), 1
             if count == 0:
-                # Pure insertion: no old lines were touched, but code was
-                # inserted just after old line `start`, so flag the lines
-                # straddling that point (whoever ran them is affected).
-                result[current].update({start, start + 1})
+                result[current]["ins"].update({start, start + 1})
             else:
-                result[current].update(range(start, start + count))
+                result[current]["mod"].update(range(start, start + count))
     return dict(result)

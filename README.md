@@ -10,23 +10,28 @@ This is the same idea Google/Meta run internally (Test Impact Analysis).
 ## How it works
 
 1. **`tia record`** runs the full suite once with a pytest plugin that
-   switches coverage.py's *dynamic context* to each test's nodeid. The
-   result is a map: `{test -> {file -> lines it executed}}`, saved to
-   `.tia/map.json`.
-2. **`tia run`** diffs your working tree against a git ref (default
-   `HEAD`), reading the **old side** of each hunk so the changed line
-   numbers live in the same coordinate system the map was recorded in.
+   switches coverage.py's *dynamic context* to each test's nodeid, then
+   maps every executed line to its enclosing function via the AST. The
+   result is a method-level map `{test -> {file -> {qualnames}}}` saved
+   to `.tia/map.json`, stamped with the git ref it was recorded at.
+   Because coverage is dynamic, the whole call chain a test exercises
+   (controller → service → repo → utils) is captured for free.
+2. **`tia run`** diffs your tree against that ref, reading the **old
+   side** of each hunk (same coordinate system as the map), then parses
+   each file *as it existed at that ref* (`git show`) to resolve changed
+   lines to changed functions.
 3. It selects tests by three rules (see `tia/select.py`) and runs only
    those via pytest.
 
 ## Selection rules
 
-1. **Line hit** — a changed line is one the test executed. Precise.
-2. **Module-level fallback** — a changed line *inside a file's covered
-   span* that no test ran (a module constant, a `def` signature, an
-   import). Conservatively runs every test touching that file. Bounded
-   by the covered span, so trailing/appended code doesn't drag the
-   whole file in.
+1. **Function hit** — a test executed a function whose body changed.
+   Immune to line shifts elsewhere in the file (the whole point of
+   going method-level).
+2. **Module-level fallback** — a file had a module-level *modification*
+   (constant, import, class body). Runs every test touching that file.
+   Module-level *insertions* (a new function/test) are ignored so they
+   don't drag the whole file in.
 3. **New test** — any collected test not in the map has never been
    measured, so it always runs.
 
@@ -47,18 +52,25 @@ nodeids and file paths stay consistent.
 
 ## Known limitations (honest list)
 
-- **Insertion anchoring.** Inserting lines is anchored to the
-  surrounding old line, which can pull in one extra test that executed
-  that line. False positives, never false negatives.
-- **Coordinate sync.** The map must be recorded at the ref you diff
-  against. Re-run `tia record` after you commit so the line numbers
-  re-sync.
-- **`def`-line-only edits.** Changing only a function's signature line
-  (e.g. a default argument) executes at import time, not under a test,
-  so it falls back to file-level selection rather than the one test.
+- **Insertion anchoring.** Appending a function/test right after an
+  existing one anchors on that one's last line, pulling it in as one
+  extra test. A bounded false positive, never a false negative.
+- **Coordinate sync.** The map is stamped with the ref it was recorded
+  at and `run` diffs against it automatically. Re-run `tia record`
+  after you commit so the map stays fresh.
+- **Non-Python dependencies** (config files, JSON fixtures, templates)
+  aren't tracked yet — a test that reads `config.yaml` won't be
+  selected when only that file changes. *(Roadmap: silent deps.)*
 - **Dynamic dispatch / reflection / subprocesses** aren't traced by
   coverage and can hide a real dependency. Re-record periodically and
   run the full suite on a cadence as a safety net.
+
+## Roadmap
+
+- [x] **Method-level analysis** (AST) — done.
+- [ ] **Silent dependencies** — track non-`.py` files each test reads.
+- [ ] **CI mode** — remote map storage + shallow-clone-safe diffing.
+- [ ] **Static fallback** for dynamic dispatch / DI frameworks.
 
 ## Demo
 

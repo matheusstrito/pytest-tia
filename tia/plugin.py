@@ -10,14 +10,20 @@ import os
 import coverage
 import pytest
 
+import tia
+
 
 class RecordPlugin:
     def __init__(self, root: str, data_file: str, source: str):
         self.root = root
+        # Don't measure tia's own code — our wrapper frame is live during
+        # each test's context and would otherwise leak into the map.
+        tia_glob = os.path.join(os.path.dirname(tia.__file__), "*")
         self.cov = coverage.Coverage(
             data_file=data_file,
             branch=False,
             source=[source],
+            omit=[tia_glob],
             config_file=False,
         )
         self.cov.erase()
