@@ -1,0 +1,16 @@
+[project]
+name = "tia"
+version = "0.1.0"
+description = "Test Impact Analysis for pytest — run only the tests your changes affect"
+requires-python = ">=3.10"
+dependencies = ["pytest>=7", "coverage>=7"]
+
+[project.scripts]
+tia = "tia.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["tia"]
