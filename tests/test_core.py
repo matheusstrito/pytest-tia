@@ -1,6 +1,6 @@
 """Unit tests for tia's pure logic (no git / no pytest subprocess)."""
 
-from tia import astmap, remotestore, resolve, select
+from tia import astmap, dynscan, remotestore, resolve, select
 
 SOURCE = '''\
 import os
@@ -138,3 +138,37 @@ def test_remote_pull_falls_back_to_latest(tmp_path):
     got = remotestore.pull(remote, "a-ref-nobody-recorded", str(dest))
     assert got is not None  # fell back to latest.json
     assert dest.read_text(encoding="utf-8") == '{"ref":"abc123"}'
+
+
+# --- ④ dynamic-dispatch scan + escalation --------------------------------
+
+def test_dynscan_flags_getattr_by_computed_name():
+    src = "import sys\ndef d(a):\n    return getattr(sys, 'x' + a)()\n"
+    markers = dynscan.find_markers(src)
+    assert any(m.startswith("getattr()") for m in markers)
+
+
+def test_dynscan_ignores_literal_getattr_and_static_code():
+    static = "def f(x):\n    return getattr(x, 'attr')\n"  # literal name = safe
+    assert dynscan.find_markers(static) == []
+    assert dynscan.find_markers("def g():\n    return 1 + 1\n") == []
+
+
+def test_dynscan_flags_eval_and_dunder_getattr():
+    assert dynscan.find_markers("y = eval('1')\n")
+    assert dynscan.find_markers("class C:\n    def __getattr__(self, n):\n        return n\n")
+
+
+def test_escalate_widens_dynamic_file_to_file_level():
+    func_changes = {"reg.py": {"handle_shout"}}
+    dynamic = {"reg.py": ["getattr() @L10"]}
+    module_files, escalated = select.escalate_dynamic(func_changes, set(), dynamic)
+    assert module_files == {"reg.py"}      # widened
+    assert escalated == {"reg.py": ["getattr() @L10"]}
+
+
+def test_escalate_leaves_static_file_method_level():
+    func_changes = {"calc.py": {"mul"}}
+    module_files, escalated = select.escalate_dynamic(func_changes, set(), {})
+    assert module_files == set()           # not widened
+    assert escalated == {}

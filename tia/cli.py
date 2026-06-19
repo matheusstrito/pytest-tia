@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from tia import astmap, diff, remotestore, resolve, select, store
+from tia import astmap, diff, dynscan, remotestore, resolve, select, store
 from tia.plugin import RecordPlugin
 
 
@@ -67,12 +67,27 @@ def cmd_record(args) -> int:
     code = pytest.main(pytest_args, plugins=[plugin])
 
     quals, funcmaps = _lines_to_quals(root, plugin.result)
+    dynamic = _scan_dynamic(root, funcmaps)
     path = store.save_map(root, quals, ref=_head_sha(root),
-                          reads=plugin.reads, funcmaps=funcmaps)
+                          reads=plugin.reads, funcmaps=funcmaps, dynamic=dynamic)
     n_reads = sum(len(v) for v in plugin.reads.values())
     print(f"\n[tia] recorded {len(quals)} tests "
-          f"({n_reads} non-py read deps) -> {path}")
+          f"({n_reads} non-py read deps, {len(dynamic)} dynamic files) -> {path}")
     return int(code) if code not in (0, 5) else 0
+
+
+def _scan_dynamic(root: str, funcmaps: dict[str, dict[int, str]]) -> dict[str, list[str]]:
+    """Flag measured files that use reflection coverage can't trace fully."""
+    out: dict[str, list[str]] = {}
+    for rel in funcmaps:
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8") as fh:
+                markers = dynscan.find_markers(fh.read())
+        except OSError:
+            continue
+        if markers:
+            out[rel] = markers
+    return out
 
 
 def cmd_run(args) -> int:
@@ -97,6 +112,14 @@ def cmd_run(args) -> int:
         changed, ref, root, tia_map.get("funcmaps"))
     data_changes = {p for p in changed if not p.endswith(".py")}
     reads = tia_map.get("reads", {})
+
+    # ④ Degrade to file-level where coverage edges can't be trusted, unless
+    # the user explicitly opts out with --trust-dynamic.
+    escalated: dict[str, list[str]] = {}
+    if not args.trust_dynamic:
+        module_files, escalated = select.escalate_dynamic(
+            func_changes, module_files, tia_map.get("dynamic", {}))
+
     all_nodeids = _collect_nodeids(args.path)
     selected = select.select_tests(
         tia_map["tests"], func_changes, module_files, all_nodeids,
@@ -109,7 +132,9 @@ def cmd_run(args) -> int:
           f"tests in suite: {total} | selected: {n}")
     for path in sorted(changed):
         funcs = func_changes.get(path)
-        if funcs:
+        if path in escalated:
+            tag = f"{', '.join(sorted(funcs))} -> file-level (dynamic)"
+        elif funcs:
             tag = ", ".join(sorted(funcs))
         elif path in module_files:
             tag = "module-level"
@@ -122,9 +147,14 @@ def cmd_run(args) -> int:
     for nodeid, reason in sorted(selected.items()):
         print(f"       -> {nodeid}   ({reason})")
 
+    for path, markers in sorted(escalated.items()):
+        print(f"[tia] ! {path} uses reflection ({', '.join(markers)}); "
+              f"widened to file-level - coverage can't trace these edges. "
+              f"Run the full suite periodically as a safety net.")
+
     if not selected:
         saved = "100%" if total else "n/a"
-        print(f"[tia] no affected tests — skipping {total} tests ({saved} saved).")
+        print(f"[tia] no affected tests - skipping {total} tests ({saved} saved).")
         return 0
     if total:
         print(f"[tia] running {n}/{total} tests "
@@ -188,6 +218,8 @@ def main(argv=None) -> int:
                      help="git ref to diff against (default: the ref the map was recorded at)")
     run.add_argument("--list", action="store_true", help="list selected tests, don't run")
     run.add_argument("--remote", help="remote dir to pull the map from if absent locally")
+    run.add_argument("--trust-dynamic", action="store_true",
+                     help="don't widen reflection-heavy files to file-level (less safe)")
     run.set_defaults(func=cmd_run)
 
     push = sub.add_parser("push", help="publish the local map to a shared remote (for CI)")

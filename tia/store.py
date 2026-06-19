@@ -11,6 +11,10 @@ v4 adds ``funcmaps``: the line->qualname table of every measured source
 file, captured at record time. ``run`` resolves a diff against these
 baked tables instead of ``git show``, so it works under CI shallow
 clones where the recorded blob may not be fetched.
+
+v5 adds ``dynamic``: per-file reflection markers found at record time, so
+``run`` can degrade to file-level selection where coverage edges can't be
+trusted.
 """
 
 import datetime
@@ -35,12 +39,14 @@ def save_map(
     ref: str | None,
     reads: dict[str, set[str]] | None = None,
     funcmaps: dict[str, dict[int, str]] | None = None,
+    dynamic: dict[str, list[str]] | None = None,
 ) -> str:
     os.makedirs(tia_dir(root), exist_ok=True)
     reads = reads or {}
     funcmaps = funcmaps or {}
+    dynamic = dynamic or {}
     data = {
-        "version": 4,
+        "version": 5,
         "ref": ref,
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "tests": {
@@ -55,6 +61,7 @@ def save_map(
             path: {str(ln): q for ln, q in sorted(l2q.items())}
             for path, l2q in sorted(funcmaps.items())
         },
+        "dynamic": {path: markers for path, markers in sorted(dynamic.items())},
     }
     path = map_path(root)
     with open(path, "w", encoding="utf-8") as fh:
@@ -74,4 +81,5 @@ def load_map(root: str) -> dict:
         path: {int(ln): q for ln, q in l2q.items()}
         for path, l2q in data.get("funcmaps", {}).items()
     }
+    data["dynamic"] = data.get("dynamic", {})
     return data

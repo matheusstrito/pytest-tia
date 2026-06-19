@@ -47,3 +47,30 @@ def select_tests(
             selected.setdefault(nodeid, "new test (never measured)")
 
     return selected
+
+
+def escalate_dynamic(
+    func_changes: dict[str, set[str]],
+    module_files: set[str],
+    dynamic: dict[str, list[str]],
+) -> tuple[set[str], dict[str, list[str]]]:
+    """Widen method-level hits to file-level for reflection-heavy files.
+
+    A function-level change in a file flagged dynamic (``getattr`` by
+    computed name, ``eval``, ``importlib``, ...) can't be trusted to have
+    captured every edge during recording, so we run *every* test touching
+    that file instead of just the ones that hit the changed function — a
+    deliberate, bounded loss of precision in exchange for not missing a
+    test. Module-level changes already select file-level, so they need no
+    escalation.
+
+    Returns ``(module_files, escalated)`` where ``escalated`` maps each
+    widened path to the markers that triggered it (for reporting).
+    """
+    module_files = set(module_files)
+    escalated: dict[str, list[str]] = {}
+    for path in func_changes:
+        if path in dynamic:
+            module_files.add(path)
+            escalated[path] = dynamic[path]
+    return module_files, escalated

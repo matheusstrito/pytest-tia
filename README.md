@@ -40,6 +40,14 @@ This is the same idea Google/Meta run internally (Test Impact Analysis).
 4. **New test** — any collected test not in the map has never been
    measured, so it always runs.
 
+A **dynamic-safety modifier** sits on top of rules 1–2: a file flagged
+at record time as using reflection (`getattr` by computed name, `eval`,
+`importlib`, `__getattr__`) is widened from method-level to file-level
+when it changes — coverage can't be trusted to have captured every edge
+in/out of it. `--trust-dynamic` opts out. This is mitigation, not a
+solution; nothing resolves dynamic dispatch precisely (it's undecidable
+in general), so still run the full suite on a cadence.
+
 ## Usage
 
 ```sh
@@ -89,15 +97,18 @@ where that blob may not be fetched. The diff itself still needs the base
   same boundary coverage uses. Files read in a subprocess or another
   thread can also be missed.
 - **Dynamic dispatch / reflection / subprocesses** aren't traced by
-  coverage and can hide a real dependency. Re-record periodically and
-  run the full suite on a cadence as a safety net.
+  coverage and can hide a real dependency. tia *detects* reflection and
+  degrades to file-level there (see the dynamic-safety modifier), but a
+  `getattr` target in one file pointing at a function in another is still
+  beyond it. Re-record periodically and run the full suite on a cadence.
 
 ## Roadmap
 
 - [x] **Method-level analysis** (AST) — done.
 - [x] **Silent dependencies** — track non-`.py` files each test reads.
 - [x] **CI mode** — remote map storage + shallow-clone-safe diffing.
-- [ ] **Static fallback** for dynamic dispatch / DI frameworks.
+- [x] **Static fallback** for dynamic dispatch / DI frameworks —
+  detect-and-degrade (mitigation, not a precise solution).
 
 ## Demo
 
