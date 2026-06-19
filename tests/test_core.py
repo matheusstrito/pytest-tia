@@ -1,6 +1,9 @@
 """Unit tests for tia's pure logic (no git / no pytest subprocess)."""
 
-from tia import astmap, dynscan, remotestore, resolve, select
+import threading
+from http.server import ThreadingHTTPServer
+
+from tia import astmap, dynscan, remotestore, resolve, select, server
 
 SOURCE = '''\
 import os
@@ -172,3 +175,47 @@ def test_escalate_leaves_static_file_method_level():
     module_files, escalated = select.escalate_dynamic(func_changes, set(), {})
     assert module_files == set()           # not widened
     assert escalated == {}
+
+
+# --- ⑤ HTTP backend roundtrip (in-process threaded server) ----------------
+
+def _serve(root):
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(str(root)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+def test_http_push_pull_by_ref_and_latest_fallback(tmp_path):
+    httpd, base = _serve(tmp_path / "srv")
+    try:
+        local = tmp_path / "map.json"
+        local.write_text('{"ref":"abc123"}', encoding="utf-8")
+        remotestore.push(str(local), base, "abc123")
+
+        by_ref = tmp_path / "by_ref.json"
+        assert remotestore.pull(base, "abc123", str(by_ref)) is not None
+        assert by_ref.read_text(encoding="utf-8") == '{"ref":"abc123"}'
+
+        # unknown ref falls back to latest over HTTP
+        latest = tmp_path / "latest.json"
+        assert remotestore.pull(base, "nobody-recorded-this", str(latest)) is not None
+        assert latest.read_text(encoding="utf-8") == '{"ref":"abc123"}'
+    finally:
+        httpd.shutdown()
+
+
+def test_http_pull_missing_returns_none(tmp_path):
+    httpd, base = _serve(tmp_path / "empty")
+    try:
+        dest = tmp_path / "out.json"
+        assert remotestore.pull(base, "whatever", str(dest)) is None
+        assert not dest.exists()
+    finally:
+        httpd.shutdown()
+
+
+def test_server_rejects_path_traversal(tmp_path):
+    assert server._resolve(str(tmp_path), "/maps/map.json") is not None
+    assert server._resolve(str(tmp_path), "/maps/../secret") is None
+    assert server._resolve(str(tmp_path), "/etc/passwd") is None
+    assert server._resolve(str(tmp_path), "/maps/") is None

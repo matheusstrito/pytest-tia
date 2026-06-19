@@ -58,6 +58,10 @@ tia run [PATH]             # run only affected tests
 tia run --since main       # diff against another ref
 tia run --list             # show the selection, don't run
 tia status                 # summarize the recorded map
+
+tia serve --dir ./maps     # run the bundled map store (zero deps)
+tia push --to  <dir|url>   # publish the local map (for CI)
+tia pull --from <dir|url>  # fetch a published map
 ```
 
 Run from the repository root (where `pyproject.toml` / `.git` live) so
@@ -66,16 +70,23 @@ nodeids and file paths stay consistent.
 ### CI mode
 
 The map a base-branch job builds has to reach the PR job that consumes
-it. Publish it to a shared remote (a cache volume, an artifact dir synced
-to S3, …) keyed by the git ref it was recorded at:
+it. Publish it to a shared remote keyed by the git ref it was recorded
+at. The remote is either a **directory** (a cache volume / artifact dir
+synced to S3) or an **`http(s)://` URL** served by the bundled store:
 
 ```sh
+# one zero-dependency map store for the team / CI (stdlib only)
+python -m tia.server --dir ./tia-maps --port 8000     # or: tia serve ...
+
 # base branch job
-tia record && tia push --to "$TIA_REMOTE"
+tia record && tia push --to http://tia.internal:8000
 
 # PR job — no local map needed; pulls by base ref, falls back to latest
-tia run --remote "$TIA_REMOTE" --since "$(git merge-base origin/main HEAD)"
+tia run --remote http://tia.internal:8000 --since "$(git merge-base origin/main HEAD)"
 ```
+
+A ready-to-copy GitHub Actions workflow is in
+[`examples/ci/github-actions.yml`](examples/ci/github-actions.yml).
 
 `run` resolves the diff against line→function tables **baked into the
 map** at record time, so it never needs `git show` on the base blob —
@@ -109,6 +120,9 @@ where that blob may not be fetched. The diff itself still needs the base
 - [x] **CI mode** — remote map storage + shallow-clone-safe diffing.
 - [x] **Static fallback** for dynamic dispatch / DI frameworks —
   detect-and-degrade (mitigation, not a precise solution).
+- [x] **Industrialize** — zero-dep HTTP map store (`tia serve`) + GitHub
+  Actions template, so adopting it is a few lines, not a project.
+- [ ] **Real-repo benchmark** — skip-rate / miss-rate on OSS suites.
 
 ## Demo
 

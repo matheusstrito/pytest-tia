@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from tia import astmap, diff, dynscan, remotestore, resolve, select, store
+from tia import astmap, diff, dynscan, remotestore, resolve, select, server, store
 from tia.plugin import RecordPlugin
 
 
@@ -148,9 +148,10 @@ def cmd_run(args) -> int:
         print(f"       -> {nodeid}   ({reason})")
 
     for path, markers in sorted(escalated.items()):
-        print(f"[tia] ! {path} uses reflection ({', '.join(markers)}); "
+        print(f"[tia] WARNING: {path} uses reflection ({', '.join(markers)}); "
               f"widened to file-level - coverage can't trace these edges. "
-              f"Run the full suite periodically as a safety net.")
+              f"Run the full suite periodically as a safety net.",
+              file=sys.stderr)
 
     if not selected:
         saved = "100%" if total else "n/a"
@@ -191,6 +192,11 @@ def cmd_pull(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    server.serve(args.dir, args.host, args.port)
+    return 0
+
+
 def cmd_status(args) -> int:
     root = os.getcwd()
     if not os.path.exists(store.map_path(root)):
@@ -223,13 +229,19 @@ def main(argv=None) -> int:
     run.set_defaults(func=cmd_run)
 
     push = sub.add_parser("push", help="publish the local map to a shared remote (for CI)")
-    push.add_argument("--to", required=True, help="remote directory to publish into")
+    push.add_argument("--to", required=True, help="remote dir or http(s) URL to publish into")
     push.set_defaults(func=cmd_push)
 
     pull = sub.add_parser("pull", help="fetch a map from a shared remote")
-    pull.add_argument("--from", dest="from_", required=True, help="remote directory")
+    pull.add_argument("--from", dest="from_", required=True, help="remote dir or http(s) URL")
     pull.add_argument("--ref", help="git ref to fetch (default: HEAD, else latest)")
     pull.set_defaults(func=cmd_pull)
+
+    srv = sub.add_parser("serve", help="run a tiny HTTP store for maps (zero deps)")
+    srv.add_argument("--dir", default="./tia-maps", help="directory to store maps in")
+    srv.add_argument("--host", default="127.0.0.1")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.set_defaults(func=cmd_serve)
 
     st = sub.add_parser("status", help="show map summary")
     st.set_defaults(func=cmd_status)

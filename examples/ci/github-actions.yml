@@ -1,0 +1,59 @@
+# Template: wire tia into GitHub Actions. Copy to .github/workflows/tia.yml
+# and adapt. The idea: the base branch builds+publishes the impact map; PRs
+# pull it and run only the affected tests.
+#
+# This template uses a cached directory as the "remote". For a team-wide
+# store instead, run `tia serve` somewhere and point --to/--remote at its
+# URL (e.g. http://tia.internal:8000) — same commands, no cache step.
+
+name: tia
+
+on:
+  push:
+    branches: [main]      # base branch: (re)build the map
+  pull_request:           # PRs: select only affected tests
+
+jobs:
+  # ---- base branch: record the full suite once, publish the map ----------
+  record:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .
+      - name: Build impact map
+        run: tia record
+      - name: Publish map (keyed by commit) to the cache-backed remote
+        run: |
+          mkdir -p "$RUNNER_TEMP/tia-remote"
+          tia push --to "$RUNNER_TEMP/tia-remote"
+        env: { TIA_REMOTE: ${{ runner.temp }}/tia-remote }
+      - uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/tia-remote
+          key: tia-map-${{ github.sha }}
+
+  # ---- pull requests: pull the base map, run the affected subset ---------
+  affected:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # need the base commit to diff against
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e .
+      - name: Restore the latest published map
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/tia-remote
+          key: tia-map-${{ github.event.pull_request.base.sha }}
+          restore-keys: tia-map-      # fall back to the newest map we have
+      - name: Run only the affected tests
+        run: |
+          BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          tia run --remote "$RUNNER_TEMP/tia-remote" --since "$BASE"
+        # No map yet (first run)? tia exits 2; fall back to the full suite:
+        # || pytest
