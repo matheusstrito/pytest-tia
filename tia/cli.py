@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from tia import astmap, diff, resolve, select, store
+from tia import astmap, diff, remotestore, resolve, select, store
 from tia.plugin import RecordPlugin
 
 
@@ -30,7 +30,13 @@ def _head_sha(cwd: str) -> str | None:
 
 
 def _lines_to_quals(root: str, line_map: dict[str, dict[str, set[int]]]):
-    """Convert {test -> {file -> lines}} into {test -> {file -> qualnames}}."""
+    """Convert {test -> {file -> lines}} into {test -> {file -> qualnames}}.
+
+    Returns the converted map plus the per-file line->qualname tables we
+    built along the way, so they can be baked into the stored map. With
+    those tables, `run` resolves a diff without ever calling ``git show``
+    — which is what makes it safe under CI shallow clones.
+    """
     cache: dict[str, dict[int, str]] = {}
     result: dict[str, dict[str, set[str]]] = {}
     for nodeid, files in line_map.items():
@@ -45,7 +51,7 @@ def _lines_to_quals(root: str, line_map: dict[str, dict[str, set[int]]]):
                 cache[rel] = l2q
             quals[rel] = {l2q[ln] for ln in lines if ln in l2q}
         result[nodeid] = quals
-    return result
+    return result, cache
 
 
 def cmd_record(args) -> int:
@@ -60,8 +66,9 @@ def cmd_record(args) -> int:
         pytest_args.insert(0, args.path)
     code = pytest.main(pytest_args, plugins=[plugin])
 
-    quals = _lines_to_quals(root, plugin.result)
-    path = store.save_map(root, quals, ref=_head_sha(root), reads=plugin.reads)
+    quals, funcmaps = _lines_to_quals(root, plugin.result)
+    path = store.save_map(root, quals, ref=_head_sha(root),
+                          reads=plugin.reads, funcmaps=funcmaps)
     n_reads = sum(len(v) for v in plugin.reads.values())
     print(f"\n[tia] recorded {len(quals)} tests "
           f"({n_reads} non-py read deps) -> {path}")
@@ -70,6 +77,13 @@ def cmd_record(args) -> int:
 
 def cmd_run(args) -> int:
     root = os.getcwd()
+    # In CI the map is built elsewhere; pull it by base ref if we have none.
+    if getattr(args, "remote", None) and not os.path.exists(store.map_path(root)):
+        os.makedirs(store.tia_dir(root), exist_ok=True)
+        want = args.since or _head_sha(root)
+        got = remotestore.pull(args.remote, want, store.map_path(root))
+        print(f"[tia] pulled map from {got}" if got
+              else f"[tia] no map in remote {args.remote}", file=sys.stderr)
     if not os.path.exists(store.map_path(root)):
         print("[tia] no map found. Run `tia record` first.", file=sys.stderr)
         return 2
@@ -79,7 +93,8 @@ def cmd_run(args) -> int:
     ref = args.since or tia_map.get("ref") or "HEAD"
 
     changed = diff.changed_lines(ref, cwd=root)
-    func_changes, module_files = resolve.changed_functions(changed, ref, root)
+    func_changes, module_files = resolve.changed_functions(
+        changed, ref, root, tia_map.get("funcmaps"))
     data_changes = {p for p in changed if not p.endswith(".py")}
     reads = tia_map.get("reads", {})
     all_nodeids = _collect_nodeids(args.path)
@@ -123,6 +138,29 @@ def cmd_run(args) -> int:
     return subprocess.run(cmd).returncode
 
 
+def cmd_push(args) -> int:
+    root = os.getcwd()
+    if not os.path.exists(store.map_path(root)):
+        print("[tia] no local map to push. Run `tia record` first.", file=sys.stderr)
+        return 2
+    ref = store.load_map(root).get("ref")
+    dst = remotestore.push(store.map_path(root), args.to, ref)
+    print(f"[tia] pushed map (ref {ref[:8] if ref else '?'}) -> {dst}")
+    return 0
+
+
+def cmd_pull(args) -> int:
+    root = os.getcwd()
+    os.makedirs(store.tia_dir(root), exist_ok=True)
+    want = args.ref or _head_sha(root)
+    got = remotestore.pull(args.from_, want, store.map_path(root))
+    if not got:
+        print(f"[tia] no map found in remote {args.from_}", file=sys.stderr)
+        return 2
+    print(f"[tia] pulled map from {got} -> {store.map_path(root)}")
+    return 0
+
+
 def cmd_status(args) -> int:
     root = os.getcwd()
     if not os.path.exists(store.map_path(root)):
@@ -149,7 +187,17 @@ def main(argv=None) -> int:
     run.add_argument("--since", default=None,
                      help="git ref to diff against (default: the ref the map was recorded at)")
     run.add_argument("--list", action="store_true", help="list selected tests, don't run")
+    run.add_argument("--remote", help="remote dir to pull the map from if absent locally")
     run.set_defaults(func=cmd_run)
+
+    push = sub.add_parser("push", help="publish the local map to a shared remote (for CI)")
+    push.add_argument("--to", required=True, help="remote directory to publish into")
+    push.set_defaults(func=cmd_push)
+
+    pull = sub.add_parser("pull", help="fetch a map from a shared remote")
+    pull.add_argument("--from", dest="from_", required=True, help="remote directory")
+    pull.add_argument("--ref", help="git ref to fetch (default: HEAD, else latest)")
+    pull.set_defaults(func=cmd_pull)
 
     st = sub.add_parser("status", help="show map summary")
     st.set_defaults(func=cmd_status)

@@ -1,6 +1,6 @@
 """Unit tests for tia's pure logic (no git / no pytest subprocess)."""
 
-from tia import astmap, select
+from tia import astmap, remotestore, resolve, select
 
 SOURCE = '''\
 import os
@@ -90,3 +90,51 @@ def test_select_unread_data_file_runs_nothing():
         data_changes={"nobody_reads_this.json"}, reads=READS,
     )
     assert sel == {}
+
+
+# --- ③ shallow-clone-safe resolution: baked funcmaps, no git needed -------
+
+FUNCMAPS = {"calc.py": {12: "mul", 13: "mul"}}
+
+
+def test_resolve_uses_baked_funcmaps_without_git():
+    # cwd points nowhere: if this needed `git show`, it would fail.
+    changes = {"calc.py": {"mod": {13}, "ins": set()}}
+    fc, mf = resolve.changed_functions(
+        changes, ref="deadbeef", cwd="/no/such/dir", funcmaps=FUNCMAPS)
+    assert fc == {"calc.py": {"mul"}}
+    assert mf == set()
+
+
+def test_resolve_baked_module_level_mod_falls_back_to_file():
+    changes = {"calc.py": {"mod": {1}, "ins": set()}}  # line 1 not in any func
+    fc, mf = resolve.changed_functions(
+        changes, ref="deadbeef", cwd="/no/such/dir", funcmaps=FUNCMAPS)
+    assert fc == {}
+    assert mf == {"calc.py"}
+
+
+# --- ③ remote store roundtrip --------------------------------------------
+
+def test_remote_push_pull_by_ref(tmp_path):
+    local = tmp_path / "map.json"
+    local.write_text('{"ref":"abc123"}', encoding="utf-8")
+    remote = str(tmp_path / "remote")
+    remotestore.push(str(local), remote, "abc123")
+
+    dest = tmp_path / "pulled.json"
+    got = remotestore.pull(remote, "abc123", str(dest))
+    assert got is not None
+    assert dest.read_text(encoding="utf-8") == '{"ref":"abc123"}'
+
+
+def test_remote_pull_falls_back_to_latest(tmp_path):
+    local = tmp_path / "map.json"
+    local.write_text('{"ref":"abc123"}', encoding="utf-8")
+    remote = str(tmp_path / "remote")
+    remotestore.push(str(local), remote, "abc123")
+
+    dest = tmp_path / "out.json"
+    got = remotestore.pull(remote, "a-ref-nobody-recorded", str(dest))
+    assert got is not None  # fell back to latest.json
+    assert dest.read_text(encoding="utf-8") == '{"ref":"abc123"}'

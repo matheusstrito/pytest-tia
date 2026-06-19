@@ -55,6 +55,27 @@ tia status                 # summarize the recorded map
 Run from the repository root (where `pyproject.toml` / `.git` live) so
 nodeids and file paths stay consistent.
 
+### CI mode
+
+The map a base-branch job builds has to reach the PR job that consumes
+it. Publish it to a shared remote (a cache volume, an artifact dir synced
+to S3, …) keyed by the git ref it was recorded at:
+
+```sh
+# base branch job
+tia record && tia push --to "$TIA_REMOTE"
+
+# PR job — no local map needed; pulls by base ref, falls back to latest
+tia run --remote "$TIA_REMOTE" --since "$(git merge-base origin/main HEAD)"
+```
+
+`run` resolves the diff against line→function tables **baked into the
+map** at record time, so it never needs `git show` on the base blob —
+which is what makes it safe under shallow clones (`clone --depth=1`),
+where that blob may not be fetched. The diff itself still needs the base
+*commit*; in a shallow checkout, fetch just that ref first
+(`git fetch --depth=1 origin <base-sha>`).
+
 ## Known limitations (honest list)
 
 - **Insertion anchoring.** Appending a function/test right after an
@@ -75,7 +96,7 @@ nodeids and file paths stay consistent.
 
 - [x] **Method-level analysis** (AST) — done.
 - [x] **Silent dependencies** — track non-`.py` files each test reads.
-- [ ] **CI mode** — remote map storage + shallow-clone-safe diffing.
+- [x] **CI mode** — remote map storage + shallow-clone-safe diffing.
 - [ ] **Static fallback** for dynamic dispatch / DI frameworks.
 
 ## Demo

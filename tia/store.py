@@ -6,6 +6,11 @@ same coordinate system automatically.
 
 v3 adds ``reads``: the non-``.py`` files each test opened, so a change to
 a config/fixture selects the tests that actually read it.
+
+v4 adds ``funcmaps``: the line->qualname table of every measured source
+file, captured at record time. ``run`` resolves a diff against these
+baked tables instead of ``git show``, so it works under CI shallow
+clones where the recorded blob may not be fetched.
 """
 
 import datetime
@@ -29,11 +34,13 @@ def save_map(
     result: dict[str, dict[str, set[str]]],
     ref: str | None,
     reads: dict[str, set[str]] | None = None,
+    funcmaps: dict[str, dict[int, str]] | None = None,
 ) -> str:
     os.makedirs(tia_dir(root), exist_ok=True)
     reads = reads or {}
+    funcmaps = funcmaps or {}
     data = {
-        "version": 3,
+        "version": 4,
         "ref": ref,
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "tests": {
@@ -43,6 +50,10 @@ def save_map(
         "reads": {
             nodeid: sorted(files)
             for nodeid, files in sorted(reads.items())
+        },
+        "funcmaps": {
+            path: {str(ln): q for ln, q in sorted(l2q.items())}
+            for path, l2q in sorted(funcmaps.items())
         },
     }
     path = map_path(root)
@@ -58,5 +69,9 @@ def load_map(root: str) -> dict:
         data["tests"][nodeid] = {f: set(quals) for f, quals in files.items()}
     data["reads"] = {
         nodeid: set(files) for nodeid, files in data.get("reads", {}).items()
+    }
+    data["funcmaps"] = {
+        path: {int(ln): q for ln, q in l2q.items()}
+        for path, l2q in data.get("funcmaps", {}).items()
     }
     return data
