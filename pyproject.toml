@@ -5,6 +5,7 @@
 name = "pytest-tia"
 version = "1.1.0"
 description = "Test Impact Analysis for pytest — run only the tests your changes affect"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pytest>=7", "coverage>=7"]
 
