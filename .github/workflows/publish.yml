@@ -24,12 +24,11 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -58,6 +57,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write   # mint the short-lived OIDC token PyPI trusts
     steps:
       - uses: actions/download-artifact@v6
