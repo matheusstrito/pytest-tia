@@ -14,14 +14,16 @@ Four rules:
 
 def select_tests(
     map_tests: dict[str, dict[str, set[str]]],
-    func_changes: dict[str, set[str]],
-    module_files: set[str],
+    func_changes: dict[str, set[str]] | None,
+    module_files: set[str] | None,
     all_nodeids: set[str],
     data_changes: set[str] | None = None,
     reads: dict[str, set[str]] | None = None,
 ) -> dict[str, str]:
     """Return ``{nodeid: human-readable reason}`` for tests to run."""
     selected: dict[str, str] = {}
+    func_changes = func_changes or {}
+    module_files = module_files or set()
 
     for path, changed_funcs in func_changes.items():
         for nodeid, files in map_tests.items():
