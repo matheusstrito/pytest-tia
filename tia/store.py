@@ -61,7 +61,7 @@ def save_map(
             path: {str(ln): q for ln, q in sorted(l2q.items())}
             for path, l2q in sorted(funcmaps.items())
         },
-        "dynamic": {path: markers for path, markers in sorted(dynamic.items())},
+        "dynamic": dict(sorted(dynamic.items())),
     }
     path = map_path(root)
     with open(path, "w", encoding="utf-8") as fh:

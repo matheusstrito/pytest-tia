@@ -4,7 +4,7 @@ import os
 import threading
 from http.server import ThreadingHTTPServer
 
-from tia import astmap, dynscan, remotestore, report, resolve, select, semantic, server
+from tia import astmap, dynscan, remotestore, report, resolve, select, semantic, server, store
 
 SOURCE = '''\
 import os
@@ -555,3 +555,19 @@ def test_recorder_records_all_contexts_per_shared_line(tmp_path):
     finally:
         sys.path.remove(str(tmp_path))
         sys.modules.pop("shared_mod", None)
+
+
+def test_save_map_stores_dynamic_markers_sorted_by_path(tmp_path):
+    # "dynamic" used to be built with a dict comprehension over an
+    # already-sorted iterable of (key, value) pairs with no transform on
+    # either side -- equivalent to just calling dict() on it. Confirms
+    # the simplified `dict(sorted(...))` form keeps the same contract:
+    # every path is present, values preserved, keys sorted.
+    dynamic = {"z_module.py": ["eval() @L9"], "a_module.py": ["getattr() @L3"]}
+    store.save_map(str(tmp_path), {}, "deadbeef", dynamic=dynamic)
+    saved = store.load_map(str(tmp_path))
+    assert saved["dynamic"] == {
+        "a_module.py": ["getattr() @L3"],
+        "z_module.py": ["eval() @L9"],
+    }
+    assert list(saved["dynamic"].keys()) == ["a_module.py", "z_module.py"]
