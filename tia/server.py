@@ -19,6 +19,7 @@ of its directory.
 
 import argparse
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PREFIX = "/maps/"
@@ -69,9 +70,22 @@ def make_handler(root: str):
     return Handler
 
 
-def serve(root: str, host: str, port: int) -> None:
+def serve(root: str, host: str, port: int) -> int:
+    """Run the map server until interrupted.
+
+    Returns 0 on a clean shutdown (Ctrl-C) and 1 if the server could not
+    even bind to ``host``/``port`` (port already in use, permission
+    denied, invalid address, ...). Binding errors are reported on
+    stderr instead of a raw traceback so ``tia serve`` behaves like any
+    other well-behaved CLI command when misconfigured.
+    """
     os.makedirs(root, exist_ok=True)
-    httpd = ThreadingHTTPServer((host, port), make_handler(root))
+    try:
+        httpd = ThreadingHTTPServer((host, port), make_handler(root))
+    except OSError as e:
+        print(f"[tia-server] failed to bind {host}:{port}: {e}",
+              file=sys.stderr)
+        return 1
     print(f"[tia-server] serving {os.path.abspath(root)} "
           f"on http://{host}:{port}")
     try:
@@ -80,6 +94,7 @@ def serve(root: str, host: str, port: int) -> None:
         pass
     finally:
         httpd.server_close()
+    return 0
 
 
 def main(argv=None) -> int:
@@ -89,8 +104,7 @@ def main(argv=None) -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     a = p.parse_args(argv)
-    serve(a.dir, a.host, a.port)
-    return 0
+    return serve(a.dir, a.host, a.port)
 
 
 if __name__ == "__main__":

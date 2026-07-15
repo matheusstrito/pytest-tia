@@ -246,8 +246,7 @@ def cmd_pull(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    server.serve(args.dir, args.host, args.port)
-    return 0
+    return server.serve(args.dir, args.host, args.port)
 
 
 def cmd_status(args) -> int:

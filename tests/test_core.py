@@ -340,6 +340,32 @@ def test_server_rejects_path_traversal(tmp_path):
     assert server._resolve(str(tmp_path), "/maps/") is None
 
 
+def test_serve_returns_zero_on_clean_shutdown(tmp_path, monkeypatch):
+    # Ctrl-C during serve_forever() is the normal way tia-server stops.
+    # Simulate it directly so the test is deterministic (no real
+    # networking/threads needed) and assert serve() reports success.
+    def fake_serve_forever(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", fake_serve_forever)
+    code = server.serve(str(tmp_path), "127.0.0.1", 0)
+    assert code == 0
+
+
+def test_serve_returns_nonzero_when_port_already_in_use(tmp_path):
+    # occupy a real port first, then ask tia's server to bind the same
+    # one -- this is the scenario the Sonar finding was about: serve()
+    # used to swallow the OSError and cmd_serve() always returned 0.
+    blocker = ThreadingHTTPServer(("127.0.0.1", 0),
+                                  server.make_handler(str(tmp_path)))
+    port = blocker.server_address[1]
+    try:
+        code = server.serve(str(tmp_path), "127.0.0.1", port)
+        assert code == 1
+    finally:
+        blocker.server_close()
+
+
 # --- 乙 cosmetic vs semantic change detection ----------------------------
 
 def test_semantic_comment_only_change_is_cosmetic():
